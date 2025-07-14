@@ -1559,7 +1559,238 @@ class DynamicApplication : Application() {
     // 현재 오버레이 서비스가 실행 중인지 Boolean 값으로 반환합니다.
 }
 
+## dynamic.DynamicApplication2
+package com.example.dynamic // 패키지 선언: 프로젝트 내 위치를 지정
 
+import android.app.Application // Android의 Application 클래스 import
+import android.content.Intent // 서비스 실행에 사용할 Intent 클래스 import
+import android.util.Log // 로그 출력을 위한 Log 클래스 import
+import com.example.dynamic.service.OverlayService // 우리가 정의한 오버레이 서비스 import
+
+// 앱 전체에서 공통적으로 접근할 수 있는 전역 설정 및 상태를 관리하는 Application 클래스 상속
+class DynamicApplication : Application() {
+
+    private var isOverlayServiceRunning = false // 오버레이 서비스가 현재 실행 중인지 여부를 나타내는 변수
+
+    companion object {
+        private const val TAG = "DynamicApplication" // 로그 출력에 사용할 태그 상수
+    }
+
+    // 애플리케이션이 처음 생성될 때 호출되는 메서드 (앱이 시작될 때 1회 호출됨)
+    override fun onCreate() {
+        super.onCreate()
+        Log.d(TAG, "DynamicApplication onCreate") // 애플리케이션 시작 시 로그 출력
+    }
+
+    // 오버레이 서비스를 시작하는 메서드 (다른 클래스에서 호출 가능)
+    fun startOverlayService() {
+        // 서비스가 실행 중이 아닐 경우에만 실행
+        if (!isOverlayServiceRunning) {
+            Log.d(TAG, "오버레이 서비스 시작") // 시작 로그 출력
+
+            // OverlayService를 실행하기 위한 명시적 인텐트 생성
+            val intent = Intent(this, OverlayService::class.java)
+
+            // 서비스 실행 요청 (foreground X, background 서비스로 실행)
+            startService(intent)
+
+            // 서비스 실행 상태를 true로 업데이트
+            isOverlayServiceRunning = true
+        } else {
+            // 이미 실행 중인 경우 로그 출력
+            Log.d(TAG, "오버레이 서비스 이미 실행 중")
+        }
+    }
+
+    // 오버레이 서비스를 중지하는 메서드 (다른 클래스에서 호출 가능)
+    fun stopOverlayService() {
+        // 서비스가 실행 중일 때만 중지 진행
+        if (isOverlayServiceRunning) {
+            Log.d(TAG, "오버레이 서비스 중지") // 중지 로그 출력
+
+            // 중지할 서비스를 지정하기 위한 명시적 인텐트 생성
+            val intent = Intent(this, OverlayService::class.java)
+
+            // 서비스 중지 요청
+            stopService(intent)
+
+            // 서비스 실행 상태를 false로 업데이트
+            isOverlayServiceRunning = false
+        } else {
+            // 이미 중지된 상태일 경우 로그 출력
+            Log.d(TAG, "오버레이 서비스 이미 중지됨")
+        }
+    }
+
+    // 오버레이 서비스가 현재 실행 중인지 확인하는 메서드 (true 또는 false 반환)
+    fun isOverlayServiceRunning(): Boolean = isOverlayServiceRunning
+}
+
+## dynamic.MainApplication
+package com.example.dynamic // 패키지 이름 선언
+
+import android.content.Intent // 인텐트 관련 클래스 import
+import android.net.Uri // URI(패키지 경로) 관련 클래스 import
+import android.os.Build // SDK 버전 확인용
+import android.os.Bundle // 액티비티 생명주기 전달 데이터
+import android.provider.Settings // 오버레이 설정으로 이동할 때 사용
+import android.widget.Button // 버튼 View import
+import android.widget.TextView // 텍스트뷰 View import
+import android.widget.Toast // 토스트 메시지 출력용
+import androidx.activity.result.contract.ActivityResultContracts // 권한 설정 결과 수신을 위한 Contract
+import androidx.activity.viewModels // ViewModel 연결
+import androidx.appcompat.app.AppCompatActivity // 기본 AppCompatActivity
+import androidx.lifecycle.Observer // LiveData 관찰용
+import com.example.dynamic.viewmodel.OverlayViewModel // 우리가 만든 오버레이 ViewModel import
+
+// 앱의 메인 화면 Activity
+class MainActivity : AppCompatActivity() {
+
+    private val viewModel: OverlayViewModel by viewModels() // ViewModel을 Activity에 바인딩 (생명주기 연동)
+
+    // View 참조 변수 선언 (나중에 초기화)
+    private lateinit var statusText: TextView
+    private lateinit var permissionStatusText: TextView
+    private lateinit var toggleButton: Button
+
+    private var hasShownPermissionToast = false // 토스트 중복 방지를 위한 플래그
+
+    // 오버레이 권한 설정 후 결과를 처리하는 런처 등록
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        // 권한 설정 창에서 돌아왔을 때 UI 상태 재확인
+        updateUIBasedOnPermission()
+    }
+
+    // 액티비티 생성 시 호출되는 생명주기 함수
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        supportActionBar?.hide() // 상단 액션바 숨기기 (타이틀 중복 방지)
+
+        setContentView(R.layout.activity_main) // 레이아웃 XML 설정
+
+        initViews() // 뷰 참조 초기화
+        setupViews() // 이벤트 리스너 설정
+        observeViewModel() // ViewModel LiveData 관찰 시작
+
+        updateUIBasedOnPermission() // 시작 시 권한 및 UI 상태 반영
+    }
+
+    // findViewById를 통해 뷰를 참조해 변수에 저장
+    private fun initViews() {
+        statusText = findViewById(R.id.statusText)
+        permissionStatusText = findViewById(R.id.permissionStatusText)
+        toggleButton = findViewById(R.id.toggleButton)
+    }
+
+    // 버튼에 클릭 리스너 부착
+    private fun setupViews() {
+        toggleButton.setOnClickListener {
+            handleToggleButtonClick() // 버튼 클릭 시 실행할 동작 정의
+        }
+    }
+
+    // 토글 버튼 클릭 시 처리 로직
+    private fun handleToggleButtonClick() {
+        if (hasOverlayPermission()) {
+            viewModel.toggleOverlayFlag() // 권한이 있으면 플래그 토글
+        } else {
+            requestOverlayPermission() // 없으면 권한 요청
+        }
+    }
+
+    // ViewModel의 LiveData를 관찰하여 UI 업데이트
+    private fun observeViewModel() {
+        viewModel.overlayFlag.observe(this, Observer { flag ->
+            if (hasOverlayPermission()) {
+                updateUIWithFlag(flag) // 권한이 있을 때만 UI 업데이트
+            }
+        })
+    }
+
+    // 권한 여부에 따라 전체 UI 상태를 업데이트
+    private fun updateUIBasedOnPermission() {
+        if (hasOverlayPermission()) {
+            updatePermissionStatusUI(true) // 권한 있음 표시
+            val currentFlag = viewModel.overlayFlag.value ?: 0
+            updateUIWithFlag(currentFlag) // 현재 오버레이 플래그 반영
+        } else {
+            updatePermissionStatusUI(false) // 권한 없음 표시
+            updateUIForPermissionRequired() // 권한 요청 UI로 변경
+        }
+    }
+
+    // 텍스트뷰를 통해 권한 상태 표시 (초록/빨강)
+    private fun updatePermissionStatusUI(hasPermission: Boolean) {
+        if (hasPermission) {
+            permissionStatusText.text = "권한 허용됨"
+            permissionStatusText.setTextColor(getColor(android.R.color.holo_green_dark))
+        } else {
+            permissionStatusText.text = "권한 필요"
+            permissionStatusText.setTextColor(getColor(android.R.color.holo_red_dark))
+        }
+    }
+
+    // 플래그 값(0/1)에 따라 UI를 구성 (버튼 텍스트, 색상 등)
+    private fun updateUIWithFlag(flag: Int) {
+        val statusMessage = viewModel.getOverlayStatusText() // 상태 텍스트 생성
+        val isActive = flag == 1
+
+        statusText.text = statusMessage // 상태 텍스트뷰에 반영
+
+        if (isActive) {
+            toggleButton.text = "오버레이 끄기 (현재: $flag)"
+            toggleButton.setBackgroundColor(getColor(android.R.color.holo_red_light))
+        } else {
+            toggleButton.text = "오버레이 켜기 (현재: $flag)"
+            toggleButton.setBackgroundColor(getColor(android.R.color.holo_green_light))
+        }
+
+        toggleButton.isEnabled = true // 버튼 활성화
+    }
+
+    // 권한이 필요한 경우 UI 구성
+    private fun updateUIForPermissionRequired() {
+        statusText.text = "오버레이 권한이 필요합니다"
+        toggleButton.text = "권한 요청"
+        toggleButton.setBackgroundColor(getColor(android.R.color.holo_orange_light))
+        toggleButton.isEnabled = true
+
+        // 처음 한 번만 토스트 메시지 출력
+        if (!hasShownPermissionToast) {
+            Toast.makeText(this, "오버레이 권한을 허용해주세요", Toast.LENGTH_LONG).show()
+            hasShownPermissionToast = true
+        }
+    }
+
+    // 현재 오버레이 권한이 있는지 확인
+    private fun hasOverlayPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Settings.canDrawOverlays(this) // 마시멜로 이상일 경우 시스템 API 사용
+        } else {
+            true // 하위 버전은 기본적으로 권한 허용됨
+        }
+    }
+
+    // 시스템 설정으로 이동하여 사용자에게 권한 요청
+    private fun requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            permissionLauncher.launch(intent) // 결과는 위의 permissionLauncher가 받음
+        }
+    }
+
+    // 액티비티가 다시 화면에 나타날 때 (백 → 포그라운드)
+    override fun onResume() {
+        super.onResume()
+        updateUIBasedOnPermission() // 포커싱될 때마다 권한 상태 재확인
+    }
+}
 
 
 
@@ -1866,3 +2097,126 @@ OverlayViewModel 또는 다른 컴포넌트에서 오버레이 서비스를 켜�
 오버레이는 앱 전체에서 제어되어야 하니까
 
 ViewModel이나 Activity에서 간접적으로 앱 전역(Application)의 상태나 서비스를 제어하려고 DynamicApplication을 매개로 접근하는 거예요.
+
+
+
+
+
+
+
+
+private val viewModel: OverlayViewModel by viewModels()
+는 OverlayViewModel을 현재 Activity에 바인딩(bind)하여 사용하는 코드이고, Kotlin의 위임 프로퍼티(delegate property) 를 통해 ViewModel을 자동으로 생성 및 제공받는 방식입니다.
+
+하나씩 분해해서 설명하면:
+
+OverlayViewModel
+당신이 만든 ViewModel 클래스입니다.
+오버레이 상태(플래그), 서비스 바인딩, 권한 여부 등을 UI와 분리된 채로 처리합니다.
+즉, UI(Activity)는 이 ViewModel에 명령만 내리면 되고, 내부 상태나 복잡한 로직은 ViewModel이 관리합니다.
+
+by viewModels()
+viewModels()는 Android KTX가 제공하는 ViewModel 위임 함수입니다.
+Activity의 생명주기에 맞춰 ViewModel 인스턴스를 제공해 줍니다.
+처음 호출 시 ViewModel을 자동으로 생성하고, 이후에는 기존 인스턴스를 재사용합니다.
+이 ViewModel은 내부적으로 ViewModelProvider를 통해 관리됩니다.
+
+private val viewModel: OverlayViewModel
+viewModel이라는 참조 변수를 선언하고,
+OverlayViewModel 타입의 인스턴스를 가져와서 저장합니다.
+Activity와 ViewModel 사이의 연결 통로가 되는 변수입니다.
+비유적으로 설명하면
+
+by viewModels()는 "이 액티비티에 맞는 ViewModel을 하나 자동으로 줘" 라는 뜻이고,
+private val viewModel: OverlayViewModel은 "그걸 viewModel이라는 이름으로 저장해서 계속 쓰겠다"는 의미입니다.
+왜 중요한가?
+
+ViewModel은 Activity보다 오래 살아남을 수 있고, 화면 회전(예: 가로↔세로) 시에도 데이터 유지가 가능합니다.
+즉, onCreate()가 다시 호출돼도 ViewModel은 그대로 살아 있으므로 상태가 유지됩니다.
+필요하다면 viewModelProvider 방식과 비교도 해줄게요.
+
+이 코드가 의미하는 것
+
+private val viewModel: OverlayViewModel by viewModels()
+이건 ViewModel을 현재 Activity(MainActivity)에 연결해서 쓰는 코드예요.
+
+ViewModel이 뭐야?
+
+ViewModel은 이렇게 생각하면 됩니다:
+
+"Activity나 Fragment가 죽어도 데이터를 유지해주는 저장소이자,
+UI 로직과 분리되어 있는 백그라운드 도우미."
+즉,
+
+Activity는 UI를 보여주는 곳
+ViewModel은 상태를 저장하거나 계산을 담당하는 곳
+예를 들어, 오버레이 상태(flag)가 켜졌는지 꺼졌는지 계속 기억하고 있어야 할 때
+Activity가 아니라 ViewModel에 저장하면, Activity가 껐다 켜져도 값이 유지돼요.
+
+그럼 by viewModels()는?
+
+이건 코틀린 문법 중 하나로,
+"이 ViewModel을 나 대신 알아서 만들고 관리해줘" 라는 뜻이에요.
+
+private val viewModel: OverlayViewModel by viewModels()
+이 코드는 실제로는 이런 걸 하는 거예요:
+
+OverlayViewModel 객체를 Activity 생명주기에 맞춰 자동 생성
+한 번만 생성해서 회전해도 유지
+viewModel이라는 이름으로 쓰게 해줌
+왜 굳이 ViewModel을 써야 해?
+
+1. 화면 회전(세로 ↔ 가로)해도 데이터 안 날아가게 하려고
+Activity는 화면 회전하면 onCreate()부터 다시 실행됨 → 데이터 날아감
+ViewModel에 있으면 날아가지 않음
+2. UI 로직과 상태 관리를 분리하려고
+버튼 눌러서 flag 켜고 끄고 → 그 상태를 ViewModel이 관리
+Activity는 "켜줘", "꺼줘"라고만 지시하면 됨
+3. Lifecycle-aware (수명 자동 관리)
+더 이상 안 쓰면 자동으로 정리됨
+결론
+
+항목	의미
+OverlayViewModel	오버레이 상태를 저장하고 관리하는 클래스
+by viewModels()	ViewModel을 자동으로 생성하고 바인딩해주는 코틀린 위임 문법
+왜 씀?	UI와 데이터/상태를 분리하고, 회전해도 값 유지하고, 수명도 자동 관리하려고
+필요하면 LiveData랑 같이 쓰는 이유도 이어서 설명해드릴게요!
+
+
+
+
+
+
+
+
+
+전체 코드 설명
+
+private val permissionLauncher = registerForActivityResult(
+    ActivityResultContracts.StartActivityForResult()
+) { _ ->
+    // 권한 설정 후 UI 상태 재확인
+    updateUIBasedOnPermission()
+}
+하나씩 아주 자세히 풀어보면
+
+1. registerForActivityResult(...)
+ActivityResult API를 사용해서 다른 액티비티를 실행하고,
+그 결과를 받아오는 메커니즘입니다.
+예전에는 startActivityForResult()를 썼는데 지금은 이 방법이 최신 방식이에요.
+2. ActivityResultContracts.StartActivityForResult()
+권한 설정을 위해 다른 설정 화면으로 이동할 때 사용해요.
+즉, Settings.ACTION_MANAGE_OVERLAY_PERMISSION 같은 인텐트를 실행해서
+사용자가 "권한 허용"을 누를 수 있도록 설정 창을 열어주는 역할입니다.
+3. { _ -> updateUIBasedOnPermission() }
+사용자가 설정 창에서 돌아오면 실행되는 콜백 함수예요.
+_ 는 결과값을 사용하지 않겠다는 의미고,
+updateUIBasedOnPermission() 을 호출해서,
+→ 지금 권한을 허용했는지 다시 검사하고 UI를 최신 상태로 업데이트해요.
+정리: 이 코드의 역할
+
+단계	설명
+사용자에게 오버레이 권한이 없는 경우	requestOverlayPermission()에서 인텐트를 실행함
+설정창으로 이동	permissionLauncher.launch(intent)
+설정 후 다시 돌아오면	위 registerForActivityResult 코드가 실행됨
+권한 허용 여부 다시 확인	updateUIBasedOnPermission() 호출
